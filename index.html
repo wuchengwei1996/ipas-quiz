@@ -625,6 +625,13 @@
             margin-bottom: 24px;
         }
         .glossary-panel summary { cursor: pointer; font-weight: 700; font-size: 0.95rem; }
+        .sync-hint { font-size: 0.85rem; color: var(--text-muted, #94a3b8); line-height: 1.6; margin: 10px 0; }
+        .sync-btn { margin: 6px 8px 6px 0; }
+        .sync-status { font-size: 0.85rem; color: #86efac; }
+        .sync-box { display: block; width: 100%; box-sizing: border-box; min-height: 64px; margin: 8px 0; padding: 8px; border-radius: 8px; border: 1px solid var(--surface-border); background: rgba(0,0,0,0.25); color: inherit; font-size: 0.75rem; word-break: break-all; }
+        .sync-open { display: inline-block; margin: 4px 0 8px; color: var(--primary); font-weight: 700; }
+        .sync-manual { margin-top: 8px; font-size: 0.85rem; }
+        .sync-manual summary { font-weight: 400; font-size: 0.85rem; color: var(--text-muted, #94a3b8); }
         .glossary-search {
             width: 100%;
             margin: 12px 0;
@@ -818,6 +825,21 @@
         <summary>📖 名詞小字典（163 個）：統計、評估指標、訓練、生成式 AI…</summary>
         <input type="search" id="glossary-search" class="glossary-search" placeholder="搜尋，例如：梯度、Recall、標準差" oninput="renderGlossary()">
         <div id="glossary-list"></div>
+    </details>
+
+    <!-- 進度搬家：不同網址（本機檔案、網站、手機）各自存進度，用連結搬過去 -->
+    <details class="glossary-panel" id="sync-panel">
+        <summary>📦 進度搬家：把這台裝置的作答紀錄搬到網站或手機</summary>
+        <p class="sync-hint">① 在<b>有紀錄的那台</b>按「產生搬家連結」，連結會自動複製。② 在要接收的裝置打開這個連結，按確定就合併進去，原本的紀錄不會被刪掉。</p>
+        <button class="btn-filter sync-btn" onclick="makeSyncLink()">產生搬家連結</button>
+        <span id="sync-status" class="sync-status"></span>
+        <textarea id="sync-out" class="sync-box" readonly hidden></textarea>
+        <a id="sync-open" class="sync-open" target="_blank" rel="noopener" hidden>👉 直接在網站開啟並匯入</a>
+        <details class="sync-manual">
+            <summary>連結打不開？手動貼上</summary>
+            <textarea id="sync-in" class="sync-box" placeholder="把搬家連結或代碼貼在這裡"></textarea>
+            <button class="btn-filter sync-btn" onclick="importSyncText(document.getElementById('sync-in').value)">匯入</button>
+        </details>
     </details>
 
     <!-- Four Quadrants Dashboard -->
@@ -1057,6 +1079,72 @@
         function saveState() {
             localStorage.setItem('ipas_quadrant_state', JSON.stringify(state));
             updateDashboard();
+        }
+
+        // ===== 進度搬家 =====
+        const SITE_URL = 'https://wuchengwei1996.github.io/ipas-quiz/';
+        function b64encode(str) {
+            const bytes = new TextEncoder().encode(str);
+            let bin = ''; bytes.forEach(b => bin += String.fromCharCode(b));
+            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+        function b64decode(code) {
+            const s = code.replace(/-/g, '+').replace(/_/g, '/');
+            const bin = atob(s + '='.repeat((4 - s.length % 4) % 4));
+            return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+        }
+        function makeSyncLink() {
+            let hours = null;
+            try { hours = localStorage.getItem('ipas_hours'); } catch (e) {}
+            const payload = { v: 1, s: state, h: hours };
+            const link = SITE_URL + '#sync=' + b64encode(JSON.stringify(payload));
+            const out = document.getElementById('sync-out');
+            out.value = link; out.hidden = false;
+            const open = document.getElementById('sync-open');
+            open.href = link; open.hidden = false;
+            const n = Object.keys(state.tested).length;
+            const status = document.getElementById('sync-status');
+            const done = (msg) => { status.textContent = msg; };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(link).then(
+                    () => done(`已複製（含 ${n} 題作答紀錄）`),
+                    () => { out.select(); done(`請手動複製下方連結（含 ${n} 題）`); });
+            } else { out.select(); done(`請手動複製下方連結（含 ${n} 題）`); }
+        }
+        // 合併規則：對方有、這台沒有的題目補進來；兩邊都有的保留這台的作答；曾答錯／已讀取聯集
+        function mergeSync(payload) {
+            const inc = payload.s || {};
+            let added = 0;
+            Object.keys(inc.tested || {}).forEach(id => {
+                if (!(id in state.tested)) {
+                    state.tested[id] = inc.tested[id];
+                    if (inc.selected && id in inc.selected) state.selected[id] = inc.selected[id];
+                    added++;
+                }
+            });
+            ['studied', 'everWrong'].forEach(k => {
+                state[k] = state[k] || {};
+                Object.keys(inc[k] || {}).forEach(id => { if (inc[k][id]) state[k][id] = true; });
+            });
+            Object.keys(state.tested).forEach(id => { if (state.tested[id] === false) state.everWrong[id] = true; });
+            try { if (payload.h && !localStorage.getItem('ipas_hours')) localStorage.setItem('ipas_hours', payload.h); } catch (e) {}
+            saveState();
+            if (typeof renderPlan === 'function') renderPlan();
+            return added;
+        }
+        function importSyncText(text, fromLink) {
+            const m = String(text || '').trim().match(/(?:#sync=)?([A-Za-z0-9_-]{20,})$/);
+            if (!m) { alert('看不懂這段內容，請貼上完整的搬家連結。'); return; }
+            let payload;
+            try { payload = JSON.parse(b64decode(m[1])); } catch (e) { alert('連結內容不完整，可能複製時被截斷了，請重新產生。'); return; }
+            if (!payload || payload.v !== 1 || !payload.s || !payload.s.tested) { alert('這不是刷題 App 的搬家連結。'); return; }
+            const n = Object.keys(payload.s.tested).length;
+            const ok = confirm(`要把另一台裝置的 ${n} 題作答紀錄合併到這裡嗎？
+這台已作答的題目會保留原樣，不會被覆蓋。`);
+            if (fromLink) history.replaceState(null, '', location.pathname + location.search);
+            if (!ok) return;
+            const added = mergeSync(payload);
+            alert(`完成：新增 ${added} 題紀錄，這台現在共有 ${Object.keys(state.tested).length} 題。`);
         }
 
         function getQuadrant(qid) {
@@ -1533,6 +1621,9 @@
 
         // Init
         applyFilters();
+
+        // 打開搬家連結時自動詢問是否匯入
+        if (location.hash.startsWith('#sync=')) setTimeout(() => importSyncText(location.hash, true), 300);
 
         // PWA：離線快取（僅 https / localhost 生效，直接開檔案時略過）
         if ('serviceWorker' in navigator && location.protocol !== 'file:') {
