@@ -1,7 +1,7 @@
 // iPAS 刷題 App 的離線快取
 // 頁面：有網路時先抓最新版（題庫更新會立刻生效），沒網路才用快取
 // 圖示與 manifest：先用快取
-const CACHE = 'ipas-quiz-v2';
+const CACHE = 'ipas-quiz-v3';
 const ASSETS = [
   './',
   './index.html',
